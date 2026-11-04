@@ -1,6 +1,8 @@
 # GoPaaS Platform
 
-Cloud-native GoPaaS demo platform aligned with:
+A portfolio project for learning Go microservices and Kubernetes controllers.
+The [design status](docs/DESIGN_STATUS.md) records differences from the broader
+GoForge design, including the use of Linkerd and workload-management services.
 
 **Cloud-Native GoPaaS Platform Development**
 
@@ -22,7 +24,7 @@ api-gateway (HTTP/REST, go-micro registration)
         ↓ gRPC / protobuf (go-micro transport)
 resource-service ── scheduler-service
         ↓
-Kubernetes API (Deployments / ScheduledTask CRD → Jobs)
+Kubernetes API (Deployments / ScheduledTask CRD → CronJobs → Jobs)
         ↓
 Prometheus / Grafana
 ```
@@ -33,8 +35,8 @@ Prometheus / Grafana
 |---|---|
 | `services/api-gateway` | HTTP gateway, rate limit, Hystrix client wrapper, Consul discovery |
 | `services/resource-service` | Create/get/list/scale/delete Deployments |
-| `services/scheduler-service` | Submit ScheduledTask intents (CRD or Job fallback) |
-| `controllers/scheduledtask` | Custom controller: ScheduledTask CRD → Job |
+| `services/scheduler-service` | Submit ScheduledTask intents; propagate Kubernetes errors |
+| `controllers/scheduledtask` | Reconcile one owned CronJob for recurring execution |
 | `deploy/` | Docker Compose, kind/K8s manifests, Prometheus, Grafana |
 
 ## Quick start (three demos)

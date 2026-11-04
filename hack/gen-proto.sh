@@ -13,7 +13,7 @@ for proto in api/proto/resource/v1/resource.proto api/proto/scheduler/v1/schedul
   protoc \
     --proto_path=api/proto \
     --go_out=api/gen --go_opt=module=github.com/gopaas/platform/api/gen \
-    --micro_out=api/gen --micro_opt=module=github.com/gopaas/platform/api/gen \
+    --micro_out=paths=source_relative:api/gen \
     "$proto"
 done
 

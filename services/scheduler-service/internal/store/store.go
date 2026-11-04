@@ -6,9 +6,6 @@ import (
 	"sync"
 
 	schedulerv1 "github.com/gopaas/platform/api/gen/scheduler/v1"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -114,7 +111,7 @@ type k8sStore struct {
 	dynamic dynamic.Interface
 }
 
-// NewK8sStore creates ScheduledTask CRDs (preferred) or falls back to Jobs.
+// NewK8sStore requires the ScheduledTask CRD; errors never trigger a different workload.
 func NewK8sStore(client *kubernetes.Clientset, dyn dynamic.Interface) Store {
 	return &k8sStore{client: client, dynamic: dyn}
 }
@@ -143,100 +140,32 @@ func (k *k8sStore) Submit(ctx context.Context, req *schedulerv1.SubmitTaskReques
 	if err == nil {
 		return fromUnstructured(created), nil
 	}
-	// Fallback for clusters without the CRD installed yet: create a one-shot Job.
-	if !apierrors.IsNotFound(err) && !metaNoMatch(err) {
-		// still try job fallback for CRD missing
-	}
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.Name,
-			Namespace: req.Namespace,
-			Labels:    req.Labels,
-			Annotations: map[string]string{
-				"gopaas.io/schedule": req.Schedule,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:    req.Name,
-						Image:   req.Image,
-						Command: splitCommand(req.Command),
-					}},
-				},
-			},
-		},
-	}
-	createdJob, jerr := k.client.BatchV1().Jobs(req.Namespace).Create(ctx, job, metav1.CreateOptions{})
-	if jerr != nil {
-		return nil, fmt.Errorf("create ScheduledTask: %v; fallback Job: %w", err, jerr)
-	}
-	return &schedulerv1.TaskInfo{
-		Name:      createdJob.Name,
-		Namespace: createdJob.Namespace,
-		Image:     req.Image,
-		Schedule:  req.Schedule,
-		Command:   req.Command,
-		Status:    "JobFallback",
-		Message:   "ScheduledTask CRD unavailable; created batch/v1 Job",
-		Labels:    req.Labels,
-	}, nil
+	return nil, fmt.Errorf("create ScheduledTask (install the CRD and controller first): %w", err)
 }
 
 func (k *k8sStore) Get(ctx context.Context, namespace, name string) (*schedulerv1.TaskInfo, error) {
 	obj, err := k.dynamic.Resource(scheduledTaskGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		return fromUnstructured(obj), nil
-	}
-	job, jerr := k.client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
-	if jerr != nil {
+	if err != nil {
 		return nil, err
 	}
-	return &schedulerv1.TaskInfo{
-		Name:      job.Name,
-		Namespace: job.Namespace,
-		Schedule:  job.Annotations["gopaas.io/schedule"],
-		Status:    "Job",
-		Message:   "loaded from Job fallback",
-		Labels:    job.Labels,
-	}, nil
+	return fromUnstructured(obj), nil
 }
 
 func (k *k8sStore) List(ctx context.Context, namespace string) ([]*schedulerv1.TaskInfo, error) {
 	list, err := k.dynamic.Resource(scheduledTaskGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
-		out := make([]*schedulerv1.TaskInfo, 0, len(list.Items))
-		for i := range list.Items {
-			out = append(out, fromUnstructured(&list.Items[i]))
-		}
-		return out, nil
-	}
-	jobs, jerr := k.client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
-	if jerr != nil {
+	if err != nil {
 		return nil, err
 	}
-	out := make([]*schedulerv1.TaskInfo, 0, len(jobs.Items))
-	for i := range jobs.Items {
-		j := jobs.Items[i]
-		out = append(out, &schedulerv1.TaskInfo{
-			Name:      j.Name,
-			Namespace: j.Namespace,
-			Schedule:  j.Annotations["gopaas.io/schedule"],
-			Status:    "Job",
-			Labels:    j.Labels,
-		})
+	out := make([]*schedulerv1.TaskInfo, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, fromUnstructured(&list.Items[i]))
 	}
 	return out, nil
 }
 
 func (k *k8sStore) Cancel(ctx context.Context, namespace, name string) error {
-	err := k.dynamic.Resource(scheduledTaskGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err == nil {
-		return nil
-	}
-	return k.client.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	propagation := metav1.DeletePropagationForeground
+	return k.dynamic.Resource(scheduledTaskGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation})
 }
 
 func fromUnstructured(obj *unstructured.Unstructured) *schedulerv1.TaskInfo {
@@ -273,15 +202,4 @@ func toIfaceMap(in map[string]string) map[string]interface{} {
 		out[k] = v
 	}
 	return out
-}
-
-func splitCommand(cmd string) []string {
-	if cmd == "" {
-		return []string{"sh", "-c", "echo gopaas-task && sleep 1"}
-	}
-	return []string{"sh", "-c", cmd}
-}
-
-func metaNoMatch(err error) bool {
-	return apierrors.IsNotFound(err) || apierrors.IsMethodNotSupported(err)
 }

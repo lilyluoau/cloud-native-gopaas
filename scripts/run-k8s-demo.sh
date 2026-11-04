@@ -110,7 +110,7 @@ ok "applied ScheduledTask/${TASK}"
 
 job_found=0
 for i in $(seq 1 60); do
-  if kubectl --context "$CONTEXT" -n default get job "${TASK}-job" >/dev/null 2>&1; then
+  if kubectl --context "$CONTEXT" -n default get cronjob "${TASK}" >/dev/null 2>&1; then
     job_found=1
     break
   fi
@@ -122,9 +122,9 @@ for i in $(seq 1 60); do
   sleep 2
 done
 if [[ "$job_found" == "1" ]]; then
-  ok "controller created Job for ScheduledTask"
+  ok "controller created CronJob for ScheduledTask"
 else
-  bad "controller did not create Job"
+  bad "controller did not create CronJob"
   kubectl --context "$CONTEXT" -n gopaas logs deploy/scheduledtask-controller --tail=40 || true
 fi
 
